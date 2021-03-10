@@ -36,6 +36,7 @@ import models.MusicPlayer;
 public class App extends Application implements LaunchGameCallback, LaunchMainMenuCallback, LaunchOptionsMenuCallback, LaunchShapePickerCallback, LaunchScoreBoardCallback {
 
     private FXMLLoader   gameBoardFXML;
+    private GameState    gameState;
     private Subscription gameStateSubscription;
     private FXMLLoader   scoreboardFXML; 
     private FXMLLoader   mainMenuFXML;
@@ -118,6 +119,7 @@ public class App extends Application implements LaunchGameCallback, LaunchMainMe
     public void launchGame(GameState gameState) {
         try {
             System.out.println("launchGame");
+            this.gameState = gameState;
             music.playMusic(Track.waiting);
             playerOne = gameState.getPlayers().getValue0();
             playerTwo = gameState.getPlayers().getValue1();
@@ -129,18 +131,7 @@ public class App extends Application implements LaunchGameCallback, LaunchMainMe
             gameBoard.setOptionsMenuCB(this);
             gameBoard.setScoreBoardCB(this);
 
-            if(gameStateSubscription != null){
-                gameStateSubscription.cancel();
-            }
-            gameState.subscribe(new Subscriber<GameState.Patch>(){
-                @Override public void onSubscribe(Subscription subscription) { 
-                    gameStateSubscription = subscription; 
-                    subscription.request(1);
-                }
-                @Override public void onNext(GameState.Patch item) {    onGameStatePatch(item);};
-                @Override public void onError(Throwable throwable) { }
-                @Override public void onComplete() { }
-            });
+            subscribeToGameState(gameState);
             
             launchScene(gameBoard.getRoot());
         } catch (Exception e) {
@@ -232,8 +223,36 @@ public class App extends Application implements LaunchGameCallback, LaunchMainMe
     }
 
     private void onGameStatePatch(GameState.Patch patch){
+        SplashScreen splashScreen = splashScreenFXML.getController();
+        splashScreen.setGameState(gameState);
+        splashScreen.setLaunchMainMenuCB(new LaunchMainMenuCallback(){
+            @Override
+            public void launchMainMenu() {
+                App.this.launchMainMenu();
+            }
+        });
+        
+        splashScreen.setLaunchGameCB(new LaunchGameCallback(){
+            @Override
+            public void launchGame(GameState gameState) {
+                GameBoard gameBoard = (GameBoard) gameBoardFXML.getController();
+                GameState newGameState = new GameState(
+                    gameState.getGameMode(),
+                    gameState.getPlayers(),
+                    gameState.getSinglePlayer(),
+                    gameState.getSecondaryOption()
+                );
+                gameBoard.setGameState(newGameState);
+                subscribeToGameState(newGameState);
+
+                closeMenu(splashScreen.getRoot());
+            }
+        });
+
         if(patch.getStatus() == GameState.Status.DRAW){
-            SplashScreen splashScreen = splashScreenFXML.getController();
+            if (music.getShouldPlaySFX()){
+                music.playSFX(Track.tie);
+            }
             splashScreen.setReturnCB(new ReturnToCallback(){
                 @Override
                 public void returnTo() {
@@ -243,21 +262,40 @@ public class App extends Application implements LaunchGameCallback, LaunchMainMe
             splashScreen.setSplashType(SplashType.DRAW);
             openMenu(splashScreen.getRoot());
         } else if(patch.getWinner() != null){
-            System.out.println("winner: " + patch.getWinner());
-            SplashScreen splashScreen = splashScreenFXML.getController();
             splashScreen.setReturnCB(new ReturnToCallback(){
                 @Override
                 public void returnTo() {
                     launchMainMenu();
                 }
             });
-            splashScreen.setSplashType( 
-                patch.getWinner().getIsAI()
-                    ? SplashType.LOSE
-                    : SplashType.WIN
-            );
+            if(patch.getWinner().getIsAI()){
+                if (music.getShouldPlaySFX()){
+                    music.playSFX(Track.lose);
+                }
+                splashScreen.setSplashType(SplashType.LOSE);
+
+            } else{
+                music.playMusic(Track.win);
+                splashScreen.setSplashType(SplashType.WIN);
+            }
+
             openMenu(splashScreen.getRoot());
         }
         gameStateSubscription.request(1);
+    }
+
+    private void subscribeToGameState(GameState gameState){
+        if(gameStateSubscription != null){
+            gameStateSubscription.cancel();
+        }
+        gameState.subscribe(new Subscriber<GameState.Patch>(){
+            @Override public void onSubscribe(Subscription subscription) { 
+                gameStateSubscription = subscription; 
+                subscription.request(1);
+            }
+            @Override public void onNext(GameState.Patch item) { onGameStatePatch(item); };
+            @Override public void onError(Throwable throwable) { }
+            @Override public void onComplete() { }
+        });
     }
 }
